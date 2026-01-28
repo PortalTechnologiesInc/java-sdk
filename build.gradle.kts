@@ -6,6 +6,12 @@ plugins {
 group = "cc.getportal"
 version = "0.1.0"
 
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
 repositories {
     mavenCentral()
 }
@@ -16,7 +22,7 @@ publishing {
             from(components["java"])
 
             groupId = "cc.getportal"
-            artifactId = "portal-jvm-client"
+            artifactId = "portal-java-sdk"
             version = "0.1.0"
         }
     }

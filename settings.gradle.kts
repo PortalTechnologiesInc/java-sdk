@@ -1,1 +1,1 @@
-rootProject.name = "portal-jvm-client"
+rootProject.name = "portal-java-sdk"

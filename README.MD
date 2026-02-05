@@ -48,18 +48,19 @@ A Java client for the Portal WebSocket Server, providing Nostr-based authenticat
 
 ### Initialization
 
-Create an instance of `PortalSDK` by passing the health and websocket endpoints of your portal server:
+Create an instance of `PortalSDK` by passing the websocket endpoint of your portal server:
 
 ```java
-var portalSDK = new PortalSDK(healthEndpoint, wsEndpoint);
+var portalSDK = new PortalSDK(wsEndpoint);
 ```
 
 ### Connecting to the server
 
-The `connect` method will establish a connection to the server and authenticate the client.
+Establish the WebSocket connection, then authenticate with your token:
 
 ```java
-portalSDK.connect(authToken);
+portalSDK.connect();
+portalSDK.authenticate(authToken);
 ```
 
 

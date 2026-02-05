@@ -1,4 +1,5 @@
 src/main/java/cc/getportal/Main.java
+src/main/java/cc/getportal/Test.java
 
 .gradle
 build/

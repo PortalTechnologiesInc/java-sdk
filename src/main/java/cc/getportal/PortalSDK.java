@@ -3,6 +3,7 @@ package cc.getportal;
 import cc.getportal.command.PortalNotification;
 import cc.getportal.command.PortalRequest;
 import cc.getportal.command.PortalResponse;
+import cc.getportal.command.request.AuthRequest;
 import cc.getportal.model.Currency;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -12,9 +13,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
@@ -28,7 +26,6 @@ public class PortalSDK {
     private final ConcurrentHashMap<String, RegisteredNotification<?>> activeStreams = new ConcurrentHashMap<>();
 
     private final Gson gson;
-    private final String healthEndpoint;
     private final String wsEndpoint;
     Runnable onClose;
 
@@ -36,13 +33,12 @@ public class PortalSDK {
     private boolean connected = false;
     private PortalWsClient wsClient;
 
-    public PortalSDK(@NotNull String healthEndpoint, @NotNull String wsEndpoint) {
+    public PortalSDK(@NotNull String wsEndpoint) {
         this.gson = new GsonBuilder()
                 .registerTypeAdapter(Response.class, new ResponseDeserializer())
                 .registerTypeAdapter(Currency.class, new CurrencySerializer())
                 .registerTypeAdapter(Currency.class, new CurrencyDeserializer())
                 .create();
-        this.healthEndpoint = healthEndpoint;
         this.wsEndpoint = wsEndpoint;
     }
 
@@ -51,28 +47,20 @@ public class PortalSDK {
         return this;
     }
 
-    public void connect(@NotNull String authToken) {
-        this.authToken = authToken;
-        {
-            HttpClient client = HttpClient.newHttpClient();
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(this.healthEndpoint))
-                    .build();
-            String response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                    .thenApply(HttpResponse::body)
-                    .join();
-
-            boolean is_ok = response.equals("OK");
-
-            if (!is_ok) {
-                throw new PortalSDKException("health check not successful");
-            }
-
-            logger.debug("health check successful");
-        }
-
+    public void connect() throws InterruptedException {
         wsClient = new PortalWsClient(URI.create(this.wsEndpoint), this);
-        wsClient.connect();
+        wsClient.connectBlocking();
+    }
+
+    public void authenticate(@NotNull String authToken) {
+        this.authToken = authToken;
+        internalSendCommand(new AuthRequest(this.authToken), (res, err) -> {
+            if(err != null) {
+                logger.error("error auth request: {}", err);
+                return;
+            }   
+            logger.info("Authenticated: {}", res.message());
+        });
     }
 
     public void disconnect() throws InterruptedException {

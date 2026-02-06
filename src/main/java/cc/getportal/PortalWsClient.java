@@ -37,17 +37,24 @@ class PortalWsClient extends WebSocketClient {
 
         client.setConnected(false);
 
-        // Run function on close
-        if(client.onClose != null) {
-            client.onClose.run();
+        // Run function on close (catch so callback cannot kill WebSocket thread)
+        if (client.onClose != null) {
+            try {
+                client.onClose.run();
+            } catch (Exception e) {
+                logger.error("onClose callback threw", e);
+            }
         }
-
     }
 
     @Override
     public void onMessage(String message) {
         logger.debug("received message: {}", message);
-        client.callFun(message);
+        try {
+            client.callFun(message);
+        } catch (Exception e) {
+            logger.error("Error processing message (SDK or callback threw)", e);
+        }
     }
 
     @Override

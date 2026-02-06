@@ -116,6 +116,10 @@ public class PortalSDK {
         if (message.isSuccess()) {
             Response.Success success = message.success();
             RegisteredCommand registeredCommand = this.commands.get(success.id);
+            if (registeredCommand == null) {
+                logger.warn("Ignoring success for unknown command id: {}", success.id);
+                return;
+            }
 
             PortalResponse portalResponse = (PortalResponse) gson.fromJson(success.jsonElement, registeredCommand.responseType);
             registeredCommand.fun.accept(portalResponse, null);
@@ -139,6 +143,10 @@ public class PortalSDK {
             Response.Notification notification = message.notification();
 
             RegisteredNotification registeredNotification = this.activeStreams.get(notification.id);
+            if (registeredNotification == null) {
+                logger.warn("Ignoring notification for unknown stream id: {}", notification.id);
+                return;
+            }
 
             PortalNotification portalNotification = (PortalNotification) gson.fromJson(notification.jsonElement, registeredNotification.notificationType);
             registeredNotification.fun.accept(portalNotification);
@@ -155,12 +163,11 @@ public class PortalSDK {
             Response.Error error = message.error();
 
             RegisteredCommand registeredCommand = this.commands.get(error.id);
+            if (registeredCommand == null) {
+                logger.warn("Ignoring error for unknown command id: {}: {}", error.id, error.message);
+                return;
+            }
             registeredCommand.fun.accept(null, error.message);
-//            if(registeredCommand == null) {
-//                logger.error("Unexpected error: {}", error);
-//            } else {
-//                logger.error("Error of command `{}`: {}", registeredCommand.cmd, error.message);
-//            }
         }
     }
 

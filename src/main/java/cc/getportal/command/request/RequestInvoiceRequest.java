@@ -1,6 +1,5 @@
 package cc.getportal.command.request;
 
-import cc.getportal.model.InvoiceRequestContent;
 import cc.getportal.command.PortalRequest;
 import cc.getportal.command.notification.UnitNotification;
 import cc.getportal.command.response.RequestInvoiceResponse;
@@ -11,9 +10,9 @@ public class RequestInvoiceRequest extends PortalRequest<RequestInvoiceResponse,
 
     private final String recipient_key;
     private final List<String> subkeys;
-    private final InvoiceRequestContent content;
+    private final RequestInvoiceParams content;
 
-    public RequestInvoiceRequest(String recipientKey, List<String> subkeys, InvoiceRequestContent content) {
+    public RequestInvoiceRequest(String recipientKey, List<String> subkeys, RequestInvoiceParams content) {
         recipient_key = recipientKey;
         this.subkeys = subkeys;
         this.content = content;

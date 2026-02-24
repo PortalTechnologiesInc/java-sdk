@@ -1,6 +1,7 @@
 package cc.getportal.command.request;
 
 import cc.getportal.model.Currency;
+import com.google.gson.annotations.SerializedName;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -11,8 +12,13 @@ import org.jetbrains.annotations.Nullable;
 public record RequestInvoiceParams(
     long amount,
     Currency currency,
-    String expires_at,
+    @SerializedName("expires_at")
+    String expiresAt,
     @Nullable String description,
     @Nullable String refund_invoice
 ) {
+    
+    public RequestInvoiceParams(long amount, Currency currency, long expiresAt, @Nullable String description, @Nullable String refund_invoice) {
+        this(amount, currency, String.valueOf(expiresAt), description, refund_invoice);
+    }
 }

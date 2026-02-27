@@ -26,7 +26,7 @@ A Java client for the Portal WebSocket Server, providing Nostr-based authenticat
 2. Add the dependency to your `build.gradle`:
    ```groovy
    dependencies {
-      implementation 'com.github.PortalTechnologiesInc:java-sdk:0.2.1'
+      implementation 'com.github.PortalTechnologiesInc:java-sdk:0.3.0'
    }
    ```
 
@@ -35,11 +35,27 @@ A Java client for the Portal WebSocket Server, providing Nostr-based authenticat
     <dependency>
         <groupId>com.github.PortalTechnologiesInc</groupId>
         <artifactId>java-sdk</artifactId>
-        <version>0.2.1</version>
+        <version>0.3.0</version>
     </dependency>
     ```
 
-3. Once you’re done, you may now proceed integrating the SDK into your project.
+3. Once you're done, you may now proceed integrating the SDK into your project.
+
+---
+
+## Versioning & Compatibility
+
+The Java SDK version is kept in sync with the [Portal SDK Daemon](https://hub.docker.com/r/getportal/sdk-daemon) (`getportal/sdk-daemon`).
+
+**Compatibility rule:** the `major.minor` version of the SDK must match the `major.minor` version of the SDK Daemon. The patch version (`x` in `0.3.x`) is independent and can differ — it only contains bug fixes.
+
+| SDK version | SDK Daemon version |
+|-------------|-------------------|
+| `0.3.x` | `0.3.x` |
+
+**Example:** SDK `0.3.0` works with `getportal/sdk-daemon:0.3.1`, but not with `getportal/sdk-daemon:0.4.0`.
+
+When upgrading to a new `major.minor`, update both the SDK dependency and the Docker image tag together.
 
 
 ---

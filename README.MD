@@ -1,144 +1,132 @@
-# Portal Java SDK - Documentation
+# Portal Java SDK
 
-## Introduction
-
-A Java client for the Portal WebSocket Server, providing Nostr-based authentication and Lightning Network payment processing capabilities.
-
----
+Java SDK for the [Portal REST API](https://github.com/PortalTechnologiesInc/lib).
 
 ## Installation
 
-1. Add the Jitpack repository to your `build.gradle`:
-   ```groovy
-   repositories {
-       maven { url 'https://jitpack.io' }
-   }
-   ```
+Add via JitPack:
 
-   Or if you are using Maven, add the following to your `pom.xml`:
-    ```xml
-    <repository>
-        <id>jitpack.io</id>
-        <url>https://jitpack.io</url>
-    </repository>
-    ```
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        maven { url = uri("https://jitpack.io") }
+    }
+}
 
-2. Add the dependency to your `build.gradle`:
-   ```groovy
-   dependencies {
-      implementation 'com.github.PortalTechnologiesInc:java-sdk:0.3.0'
-   }
-   ```
+// build.gradle.kts
+dependencies {
+    implementation("com.github.PortalTechnologiesInc:java-sdk:0.4.0")
+}
+```
 
-   Or if you are using Maven, add the following to your `pom.xml`:
-    ```xml
-    <dependency>
-        <groupId>com.github.PortalTechnologiesInc</groupId>
-        <artifactId>java-sdk</artifactId>
-        <version>0.3.0</version>
-    </dependency>
-    ```
+## Quick Start
 
-3. Once you're done, you may now proceed integrating the SDK into your project.
+```java
+PortalClient client = new PortalClient(
+    "http://localhost:3000",   // portal-rest base URL
+    "your-auth-token",
+    "your-webhook-secret"      // null if you only use polling
+);
 
----
+// Check connectivity
+String status = client.health(); // "OK"
+```
+
+## Async Operations
+
+All async methods return `AsyncOperation<T>` immediately. The `done` future resolves
+when a terminal event arrives — either via webhook or polling.
+
+```java
+// Request a single payment
+AsyncOperation<StreamEvent> op = client.requestSinglePayment(
+    mainKey,
+    List.of(),  // subkeys
+    new SinglePaymentRequestContent("Coffee", 1000, Currency.MILLISATS, null, null, null)
+);
+
+System.out.println("Stream ID: " + op.streamId());
+```
+
+### Option A — Polling (no inbound HTTP required)
+
+```java
+StreamEvent result = client.pollUntilComplete(
+    op.streamId(),
+    PollOptions.defaults()
+        .intervalMs(500)
+        .timeoutMs(60_000)
+        .onEvent(event -> System.out.println("Event: " + event.type))
+);
+System.out.println("Terminal event: " + result.type);
+```
+
+### Option B — Webhooks (recommended for production)
+
+Mount the webhook endpoint in your HTTP server. The SDK verifies the
+`X-Portal-Signature` HMAC-SHA256 header automatically.
+
+```java
+// In your HTTP server's POST /portal/webhook handler:
+byte[] rawBody = request.getBody();
+String signature = request.getHeader("X-Portal-Signature");
+client.deliverWebhookPayload(rawBody, signature);
+
+// The done future resolves when the terminal event is delivered
+StreamEvent result = op.done().get(60, TimeUnit.SECONDS);
+```
+
+## Other Operations
+
+```java
+// Key handshake
+AsyncOperation<KeyHandshakeResult> handshake = client.newKeyHandshakeUrl(null, false);
+KeyHandshakeResult r = client.pollUntilComplete(handshake.streamId(), PollOptions.defaults())
+    .data.get... // or use handshake.done() with webhooks
+
+// Recurring payment
+AsyncOperation<RecurringPaymentResponseContent> sub = client.requestRecurringPayment(
+    mainKey, List.of(), content
+);
+
+// Invoice request
+AsyncOperation<InvoicePaymentResponse> invoice = client.requestInvoice(
+    recipientKey, List.of(),
+    new RequestInvoiceParams(1000, Currency.MILLISATS, "Test invoice")
+);
+
+// Pay a BOLT11 invoice
+PayInvoiceResponse paid = client.payInvoice("lnbc...");
+
+// JWT
+String token = client.issueJwt(targetKey, 24);
+String key = client.verifyJwt(pubkey, token);
+
+// Profile
+Profile profile = client.fetchProfile(mainKey);
+
+// Wallet info
+WalletInfoResponse info = client.getWalletInfo();
+```
 
 ## Versioning & Compatibility
 
-The Java SDK version is kept in sync with the [Portal SDK Daemon](https://hub.docker.com/r/getportal/sdk-daemon) (`getportal/sdk-daemon`).
+The Java SDK version `major.minor` must match the portal-rest (sdk-daemon) version.
+Patch versions are independent.
 
-**Compatibility rule:** the `major.minor` version of the SDK must match the `major.minor` version of the SDK Daemon. The patch version (`x` in `0.3.x`) is independent and can differ — it only contains bug fixes.
+| Java SDK | sdk-daemon |
+|----------|------------|
+| 0.4.x    | 0.4.x      |
+| 0.3.x    | 0.3.x      |
 
-| SDK version | SDK Daemon version |
-|-------------|-------------------|
-| `0.3.x` | `0.3.x` |
+## Architecture
 
-**Example:** SDK `0.3.0` works with `getportal/sdk-daemon:0.3.1`, but not with `getportal/sdk-daemon:0.4.0`.
+The new REST + polling/webhooks architecture replaces the previous WebSocket API:
 
-When upgrading to a new `major.minor`, update both the SDK dependency and the Docker image tag together.
-
-
----
-
-## Basic Usage
-
-### Initialization
-
-Create an instance of `PortalSDK` by passing the websocket endpoint of your portal server:
-
-```java
-var portalSDK = new PortalSDK(wsEndpoint);
-```
-
-### Connecting to the server
-
-Establish the WebSocket connection, then authenticate with your token:
-
-```java
-portalSDK.connect();
-portalSDK.authenticate(authToken);
-```
-
-
-### Sending a command
-
-You can send a command to the server by calling the `sendCommand` method.
-
-```java
-portalSDK.sendCommand(request, (response, err) -> {
-    if(err != null) {
-        logger.error("error sending command: {}", err);
-        return;
-    }
-    logger.info("command sent successfully: {}", response);
-});
-```
-
-### Basic example
-
-```java
-portalSDK.sendCommand(new CalculateNextOccurrenceRequest("weekly", System.currentTimeMillis() / 1000), (res, err) -> {
-    if(err != null) {
-        logger.error("error calculating next occurrence: {}", err);
-        return;
-    }
-    logger.info("next occurrence: {}", res.next_occurrence());
-});
-```
----
-
-## Available Commands
-
-Commands are implemented as specific request classes in [`src/main/java/cc/getportal/command/request/`](./src/main/java/cc/getportal/command/request/), and used via the `sendCommand()` method of the [`PortalSDK`](./src/main/java/cc/getportal/PortalSDK.java) class.
-
-Some key available commands include:
-
-- [`AuthRequest`](./src/main/java/cc/getportal/command/request/AuthRequest.java): Authenticate using a token.
-- [`KeyHandshakeUrlRequest`](./src/main/java/cc/getportal/command/request/KeyHandshakeUrlRequest.java): Get handshake URL for key and relays.
-- [`RequestSinglePaymentRequest`](./src/main/java/cc/getportal/command/request/RequestSinglePaymentRequest.java): Request a single payment.
-- [`MintCashuRequest`](./src/main/java/cc/getportal/command/request/MintCashuRequest.java): Mint Cashu tokens.
-
-> See [`src/main/java/cc/getportal/command/request/`](./src/main/java/cc/getportal/command/request/) for all available commands and additional details.
-
-To use a command, instantiate its request class and pass it to `PortalSDK.sendCommand(...)`. The full list of commands may evolve; check the request folder for the latest options.
-
----
-
-## Example Integrations
-
-- See [portal-demo](https://github.com/PortalTechnologiesInc/portal-demo) for a Kotlin example.
-
----
-
-## Main API
-
-- `PortalSDK` - Main client class
-- `PortalRequest` - Represents a request to the server
-- `PortalResponse` - Represents a response from the server
-- `PortalNotification` - Represents a notification from the server
-
----
-
-## Support
-
-For questions or issues, see the official documentation or open an issue on the project's GitHub repository.
+- **Sync operations** return their result directly.
+- **Async operations** return `AsyncOperation<T>` with `streamId` (available immediately)
+  and `done` (`CompletableFuture<T>` that resolves on terminal event).
+- **Polling** — `pollUntilComplete(streamId, options)` loops on `GET /events/:streamId`.
+- **Webhooks** — `deliverWebhookPayload(rawBody, signature)` verifies HMAC-SHA256 and
+  resolves the matching `done` future.

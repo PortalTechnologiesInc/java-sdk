@@ -31,18 +31,18 @@ PortalClient client = new PortalClient(
 
 // Check connectivity
 String status = client.health(); // "OK"
+VersionResponse ver = client.version(); // { version: "0.4.0", gitCommit: "abc1234" }
 ```
 
 ## Async Operations
 
-All async methods return `AsyncOperation<T>` immediately. The `done` future resolves
-when a terminal event arrives — either via webhook or polling.
+All async methods return `AsyncOperation<T>` immediately — the stream ID is available
+right away, and `done` resolves with the typed result when the terminal event arrives.
 
 ```java
-// Request a single payment
-AsyncOperation<StreamEvent> op = client.requestSinglePayment(
-    mainKey,
-    List.of(),  // subkeys
+// Request a single payment → resolves to InvoiceStatus
+AsyncOperation<InvoiceStatus> op = client.requestSinglePayment(
+    mainKey, List.of(),
     new SinglePaymentRequestContent("Coffee", 1000, Currency.MILLISATS, null, null, null)
 );
 
@@ -52,81 +52,99 @@ System.out.println("Stream ID: " + op.streamId());
 ### Option A — Polling (no inbound HTTP required)
 
 ```java
-StreamEvent result = client.pollUntilComplete(
-    op.streamId(),
+InvoiceStatus result = client.pollUntilComplete(
+    op,
     PollOptions.defaults()
         .intervalMs(500)
         .timeoutMs(60_000)
-        .onEvent(event -> System.out.println("Event: " + event.type))
+        .onEvent(event -> System.out.println("event: " + event.type))
 );
-System.out.println("Terminal event: " + result.type);
+System.out.println("status: " + result.status); // "paid", "timeout", etc.
 ```
 
 ### Option B — Webhooks (recommended for production)
 
-Mount the webhook endpoint in your HTTP server. The SDK verifies the
+Mount the webhook handler in your HTTP server. The SDK verifies the
 `X-Portal-Signature` HMAC-SHA256 header automatically.
 
 ```java
-// In your HTTP server's POST /portal/webhook handler:
+// POST /portal/webhook
 byte[] rawBody = request.getBody();
 String signature = request.getHeader("X-Portal-Signature");
 client.deliverWebhookPayload(rawBody, signature);
 
-// The done future resolves when the terminal event is delivered
-StreamEvent result = op.done().get(60, TimeUnit.SECONDS);
+// done resolves with the typed result
+InvoiceStatus result = op.done().get(60, TimeUnit.SECONDS);
 ```
+
+## All Async Methods
+
+| Method | Resolves to |
+|--------|-------------|
+| `requestSinglePayment(...)` | `AsyncOperation<InvoiceStatus>` |
+| `requestPaymentRaw(...)` | `AsyncOperation<InvoiceStatus>` |
+| `requestRecurringPayment(...)` | `AsyncOperation<RecurringPaymentResponseContent>` |
+| `requestInvoice(...)` | `AsyncOperation<InvoicePaymentResponse>` |
+| `requestCashu(...)` | `AsyncOperation<CashuResponseStatus>` |
+| `authenticateKey(...)` | `AsyncOperation<AuthResponseData>` |
+| `newKeyHandshakeUrl(...)` | `AsyncOperation<KeyHandshakeResult>` |
 
 ## Other Operations
 
 ```java
-// Key handshake
-AsyncOperation<KeyHandshakeResult> handshake = client.newKeyHandshakeUrl(null, false);
-KeyHandshakeResult r = client.pollUntilComplete(handshake.streamId(), PollOptions.defaults())
-    .data.get... // or use handshake.done() with webhooks
-
 // Recurring payment
 AsyncOperation<RecurringPaymentResponseContent> sub = client.requestRecurringPayment(
-    mainKey, List.of(), content
+    mainKey, List.of(), recurringContent
 );
+RecurringPaymentResponseContent r = client.pollUntilComplete(sub, PollOptions.defaults());
 
-// Invoice request
-AsyncOperation<InvoicePaymentResponse> invoice = client.requestInvoice(
+// Invoice request (ask recipient to generate a BOLT11)
+AsyncOperation<InvoicePaymentResponse> inv = client.requestInvoice(
     recipientKey, List.of(),
     new RequestInvoiceParams(1000, Currency.MILLISATS, "Test invoice")
 );
+InvoicePaymentResponse paid = client.pollUntilComplete(inv, PollOptions.defaults());
+System.out.println(paid.invoice); // lnbc...
 
-// Pay a BOLT11 invoice
-PayInvoiceResponse paid = client.payInvoice("lnbc...");
+// Pay a BOLT11 invoice directly
+PayInvoiceResponse p = client.payInvoice("lnbc...");
+
+// Key handshake
+AsyncOperation<KeyHandshakeResult> hs = client.newKeyHandshakeUrl(null, false);
+KeyHandshakeResult k = client.pollUntilComplete(hs, PollOptions.defaults());
 
 // JWT
 String token = client.issueJwt(targetKey, 24);
-String key = client.verifyJwt(pubkey, token);
+String key    = client.verifyJwt(pubkey, token);
 
 // Profile
 Profile profile = client.fetchProfile(mainKey);
 
-// Wallet info
+// Wallet
 WalletInfoResponse info = client.getWalletInfo();
 ```
 
+## Architecture
+
+```
+PortalClient
+  ├── Sync methods   → return result directly
+  └── Async methods  → return AsyncOperation<T> { streamId, CompletableFuture<T> done }
+        │
+        ├── Polling path:   pollUntilComplete(op, PollOptions) → T
+        └── Webhook path:   deliverWebhookPayload(rawBody, signature) → resolves done
+```
+
+The internal `StreamEvent` type is used only for per-event callbacks in `PollOptions.onEvent`
+and `onEvent(streamId, callback)`. Terminal payloads are deserialized directly to `T` —
+no raw JSON is ever exposed in the public API.
+
 ## Versioning & Compatibility
 
-The Java SDK version `major.minor` must match the portal-rest (sdk-daemon) version.
+The Java SDK `major.minor` must match the portal-rest (sdk-daemon) version.
 Patch versions are independent.
 
 | Java SDK | sdk-daemon |
 |----------|------------|
 | 0.4.x    | 0.4.x      |
 | 0.3.x    | 0.3.x      |
-
-## Architecture
-
-The new REST + polling/webhooks architecture replaces the previous WebSocket API:
-
-- **Sync operations** return their result directly.
-- **Async operations** return `AsyncOperation<T>` with `streamId` (available immediately)
-  and `done` (`CompletableFuture<T>` that resolves on terminal event).
-- **Polling** — `pollUntilComplete(streamId, options)` loops on `GET /events/:streamId`.
-- **Webhooks** — `deliverWebhookPayload(rawBody, signature)` verifies HMAC-SHA256 and
-  resolves the matching `done` future.

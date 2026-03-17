@@ -24,61 +24,42 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
  * Portal REST API client (Java 17+).
  *
- * <p>Async operations return an {@link AsyncOperation} immediately. Each method declares
- * its own typed result — no raw JSON exposed. Events can be received via webhooks
- * ({@link #deliverWebhookPayload}) or polling ({@link #pollUntilComplete}).
+ * <p>Configure via {@link PortalClientConfig}:
+ * <ul>
+ *   <li><b>Manual polling</b> — call {@link #pollUntilComplete} yourself</li>
+ *   <li><b>Auto-polling</b> — background scheduler resolves {@code done()} automatically</li>
+ *   <li><b>Webhooks</b> — call {@link #deliverWebhookPayload} from your HTTP server</li>
+ * </ul>
  *
- * <pre>{@code
- * PortalClient client = new PortalClient("http://localhost:3000", "token", "webhook-secret");
- *
- * // Typed async payment request
- * AsyncOperation<InvoiceStatus> op = client.requestSinglePayment(
- *     mainKey, subkeys,
- *     new SinglePaymentRequestContent("Coffee", 1000, Currency.MILLISATS, null, null, null)
- * );
- *
- * // Option A — polling
- * InvoiceStatus result = client.pollUntilComplete(op, PollOptions.defaults());
- *
- * // Option B — webhook (call from your HTTP server's POST handler)
- * client.deliverWebhookPayload(rawBody, xPortalSignatureHeader);
- * InvoiceStatus result = op.done().get();
- * }</pre>
+ * <p>All three modes use the same {@code AsyncOperation<T>} return type —
+ * only how terminal events are delivered differs.
  */
-public class PortalClient {
+public class PortalClient implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(PortalClient.class);
 
-    private final String baseUrl;
-    private final String authToken;
-    @Nullable private final String webhookSecret;
-
+    private final PortalClientConfig config;
     private final HttpClient http;
     private final Gson gson;
 
-    /** Pending async operations keyed by stream_id: future resolves with the terminal raw JSON. */
+    /** Pending streams: future resolves with terminal raw JSON, mapped to T by the registered mapper. */
     private final ConcurrentHashMap<String, PendingStream> pending = new ConcurrentHashMap<>();
+
+    @Nullable private ScheduledExecutorService pollingScheduler;
 
     // -------------------------------------------------------------------------
     // Construction
     // -------------------------------------------------------------------------
 
-    /**
-     * @param baseUrl       Base URL of the Portal REST API (e.g. {@code http://localhost:3000}).
-     * @param authToken     Bearer token for authentication (may be null for unauthenticated calls).
-     * @param webhookSecret Shared secret for HMAC-SHA256 webhook signature verification.
-     *                      Pass {@code null} if you only use polling.
-     */
-    public PortalClient(String baseUrl, @Nullable String authToken, @Nullable String webhookSecret) {
-        this.baseUrl = baseUrl.replaceAll("/+$", "");
-        this.authToken = authToken;
-        this.webhookSecret = webhookSecret;
+    public PortalClient(PortalClientConfig config) {
+        this.config = config;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -87,6 +68,53 @@ public class PortalClient {
                 .registerTypeAdapter(Currency.class, new CurrencyDeserializer())
                 .registerTypeAdapterFactory(new RawJsonTypeAdapterFactory())
                 .create();
+
+        if (config.isAutoPollingEnabled()) {
+            startPollingScheduler(config.autoPollingIntervalMs);
+        }
+    }
+
+    /** Shut down the auto-polling scheduler (if started). */
+    @Override
+    public void close() {
+        if (pollingScheduler != null) {
+            pollingScheduler.shutdown();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Auto-polling scheduler
+    // -------------------------------------------------------------------------
+
+    private void startPollingScheduler(long intervalMs) {
+        pollingScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "portal-poller");
+            t.setDaemon(true);
+            return t;
+        });
+        pollingScheduler.scheduleAtFixedRate(() -> {
+            for (Map.Entry<String, PendingStream> entry : pending.entrySet()) {
+                String streamId = entry.getKey();
+                PendingStream ps = entry.getValue();
+                try {
+                    int last = ps.lastIndex().get();
+                    EventsResponse resp = getEvents(streamId, last < 0 ? null : last);
+                    if (resp == null || resp.events == null) continue;
+                    for (StreamEvent event : resp.events) {
+                        ps.lastIndex().set(event.index);
+                        notifyListeners(ps, event);
+                        if (event.isTerminal()) {
+                            pending.remove(streamId);
+                            ps.future().complete(event._raw != null ? event._raw : new JsonObject());
+                            break;
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Auto-poll error for stream {}: {}", streamId, e.getMessage());
+                }
+            }
+        }, 0, intervalMs, TimeUnit.MILLISECONDS);
+        log.debug("Auto-polling started (interval={}ms)", intervalMs);
     }
 
     // -------------------------------------------------------------------------
@@ -101,14 +129,14 @@ public class PortalClient {
 
     private <T> T request(String method, String path, @Nullable Object body, Type responseType)
             throws IOException, InterruptedException, PortalSDKException {
-        String url = baseUrl + path;
+        String url = config.baseUrl.replaceAll("/+$", "") + path;
         log.debug("{} {}", method, url);
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(30));
 
-        if (authToken != null) {
-            builder.header("Authorization", "Bearer " + authToken);
+        if (config.authToken != null) {
+            builder.header("Authorization", "Bearer " + config.authToken);
         }
 
         String jsonBody = (body != null) ? gson.toJson(body) : "{}";
@@ -156,22 +184,22 @@ public class PortalClient {
     // Pending stream management
     // -------------------------------------------------------------------------
 
-    /**
-     * The internal future resolves with the full raw JSON of the terminal event.
-     * Each typed {@link AsyncOperation} maps that JSON to its own {@code T}.
-     */
     private record PendingStream(
             CompletableFuture<JsonObject> future,
-            java.util.concurrent.CopyOnWriteArrayList<Consumer<StreamEvent>> listeners
+            CopyOnWriteArrayList<Consumer<StreamEvent>> listeners,
+            AtomicInteger lastIndex
     ) {}
 
-    /**
-     * Register a pending stream. The {@code mapper} converts the terminal raw JSON → {@code T}.
-     */
     private <T> AsyncOperation<T> registerStream(String streamId, Function<JsonObject, T> mapper) {
         CompletableFuture<JsonObject> raw = new CompletableFuture<>();
-        pending.put(streamId, new PendingStream(raw, new java.util.concurrent.CopyOnWriteArrayList<>()));
+        pending.put(streamId, new PendingStream(raw, new CopyOnWriteArrayList<>(), new AtomicInteger(-1)));
         return new AsyncOperation<>(streamId, raw.thenApply(mapper));
+    }
+
+    private void notifyListeners(PendingStream ps, StreamEvent event) {
+        for (Consumer<StreamEvent> l : ps.listeners()) {
+            try { l.accept(event); } catch (Exception e) { log.warn("Listener error", e); }
+        }
     }
 
     private void deliverEvent(String streamId, StreamEvent event) {
@@ -180,9 +208,7 @@ public class PortalClient {
             log.debug("No pending stream for {}, ignoring event type={}", streamId, event.type);
             return;
         }
-        for (Consumer<StreamEvent> listener : ps.listeners()) {
-            try { listener.accept(event); } catch (Exception e) { log.warn("Listener error", e); }
-        }
+        notifyListeners(ps, event);
         if (event.isTerminal()) {
             pending.remove(streamId);
             ps.future().complete(event._raw != null ? event._raw : new JsonObject());
@@ -190,7 +216,7 @@ public class PortalClient {
     }
 
     /**
-     * Subscribe to all events (including non-terminal) for a stream.
+     * Subscribe to intermediate events for a stream (non-terminal included).
      *
      * @return unsubscribe handle
      */
@@ -201,7 +227,7 @@ public class PortalClient {
         return () -> ps.listeners().remove(callback);
     }
 
-    /** Cancel a pending stream, completing the {@code done} future exceptionally. */
+    /** Cancel a pending stream. */
     public void cancel(String streamId) {
         PendingStream ps = pending.remove(streamId);
         if (ps != null) ps.future().completeExceptionally(new PortalSDKException("Stream cancelled: " + streamId));
@@ -211,17 +237,14 @@ public class PortalClient {
     // Health / Version / Info
     // -------------------------------------------------------------------------
 
-    /** Health check — no auth required. Returns {@code "OK"}. */
     public String health() throws IOException, InterruptedException, PortalSDKException {
         return get("/health", String.class);
     }
 
-    /** Get server version and git commit. No auth required. */
     public VersionResponse version() throws IOException, InterruptedException, PortalSDKException {
         return get("/version", VersionResponse.class);
     }
 
-    /** Get server public key. Requires authentication. */
     public InfoResponse info() throws IOException, InterruptedException, PortalSDKException {
         return get("/info", InfoResponse.class);
     }
@@ -230,11 +253,6 @@ public class PortalClient {
     // Key Handshake
     // -------------------------------------------------------------------------
 
-    /**
-     * Create a new key handshake URL.
-     * The {@code done} future resolves with {@link KeyHandshakeResult} when the remote app
-     * completes the handshake.
-     */
     public AsyncOperation<KeyHandshakeResult> newKeyHandshakeUrl(
             @Nullable String staticToken, boolean noRequest
     ) throws IOException, InterruptedException, PortalSDKException {
@@ -263,10 +281,6 @@ public class PortalClient {
     // Payments
     // -------------------------------------------------------------------------
 
-    /**
-     * Request a single payment. Resolves with {@link InvoiceStatus} when the payment
-     * reaches a terminal state ({@code paid}, {@code timeout}, {@code error}, etc.).
-     */
     public AsyncOperation<InvoiceStatus> requestSinglePayment(
             String mainKey, List<String> subkeys, SinglePaymentRequestContent content
     ) throws IOException, InterruptedException, PortalSDKException {
@@ -280,9 +294,6 @@ public class PortalClient {
                 json -> gson.fromJson(json.getAsJsonObject("status"), InvoiceStatus.class));
     }
 
-    /**
-     * Request a raw invoice payment. Resolves with {@link InvoiceStatus}.
-     */
     public AsyncOperation<InvoiceStatus> requestPaymentRaw(
             String mainKey, List<String> subkeys, InvoiceRequestContent content
     ) throws IOException, InterruptedException, PortalSDKException {
@@ -296,10 +307,6 @@ public class PortalClient {
                 json -> gson.fromJson(json.getAsJsonObject("status"), InvoiceStatus.class));
     }
 
-    /**
-     * Request a recurring payment. Resolves with {@link RecurringPaymentResponseContent}
-     * when the user approves or rejects.
-     */
     public AsyncOperation<RecurringPaymentResponseContent> requestRecurringPayment(
             String mainKey, List<String> subkeys, RecurringPaymentRequestContent content
     ) throws IOException, InterruptedException, PortalSDKException {
@@ -339,10 +346,6 @@ public class PortalClient {
     // Invoices
     // -------------------------------------------------------------------------
 
-    /**
-     * Request an invoice from a recipient. Resolves with {@link InvoicePaymentResponse}
-     * containing the BOLT11 invoice and payment hash.
-     */
     public AsyncOperation<InvoicePaymentResponse> requestInvoice(
             String recipientKey, List<String> subkeys, RequestInvoiceParams params
     ) throws IOException, InterruptedException, PortalSDKException {
@@ -381,9 +384,6 @@ public class PortalClient {
     // Cashu
     // -------------------------------------------------------------------------
 
-    /**
-     * Request Cashu tokens from a recipient. Resolves with {@link CashuResponseStatus}.
-     */
     public AsyncOperation<CashuResponseStatus> requestCashu(
             String recipientKey, List<String> subkeys,
             String mintUrl, String unit, long amount
@@ -488,19 +488,17 @@ public class PortalClient {
     }
 
     // -------------------------------------------------------------------------
-    // Polling
+    // Manual polling
     // -------------------------------------------------------------------------
 
     /**
-     * Poll {@code GET /events/:streamId} until the terminal event arrives, then resolve
-     * the operation's {@code done} future and return the typed result.
+     * Manually poll until the operation resolves. Blocks the calling thread.
+     * <p>
+     * Use this when auto-polling is not enabled and you want synchronous-style code.
+     * If auto-polling is active, you don't need to call this — use {@code op.done()} instead.
      *
-     * <p>This is the fallback for environments where webhooks are not available.
-     *
-     * @param operation the async operation returned by any async method
-     * @param options   polling options (interval, timeout, per-event callback)
-     * @param <T>       the typed result of the operation
-     * @return the terminal result, already available via {@code operation.done()}
+     * @param operation the async operation to wait for
+     * @param options   polling interval, timeout, and per-event callback
      */
     public <T> T pollUntilComplete(AsyncOperation<T> operation, PollOptions options)
             throws PortalSDKException, IOException, InterruptedException {
@@ -537,18 +535,17 @@ public class PortalClient {
     // -------------------------------------------------------------------------
 
     /**
-     * Verify the HMAC-SHA256 signature and deliver the webhook payload.
-     * Call this from your HTTP server's POST endpoint.
+     * Verify the {@code X-Portal-Signature} header and deliver the webhook payload.
+     * Requires {@link PortalClientConfig#webhookSecret(String)} to be set.
      *
-     * @param rawBody   raw request body bytes (do NOT parse JSON before calling this)
+     * @param rawBody   raw request body bytes — do NOT parse before calling this
      * @param signature value of the {@code X-Portal-Signature} header
-     * @throws PortalSDKException if the signature is invalid or no secret is configured
      */
     public void deliverWebhookPayload(byte[] rawBody, String signature) throws PortalSDKException {
-        if (webhookSecret == null) throw new PortalSDKException("Cannot verify webhook: no webhookSecret configured");
+        if (config.webhookSecret == null) throw new PortalSDKException("No webhookSecret configured");
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(webhookSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            mac.init(new SecretKeySpec(config.webhookSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             byte[] computed = mac.doFinal(rawBody);
             String hex = HexFormat.of().formatHex(computed);
             if (!MessageDigest.isEqual(
@@ -563,10 +560,7 @@ public class PortalClient {
         deliverWebhookPayload(payload);
     }
 
-    /**
-     * Deliver an already-parsed webhook payload (skips signature verification).
-     * Useful for testing or when verification is done externally.
-     */
+    /** Deliver an already-parsed webhook payload (skips signature verification). */
     public void deliverWebhookPayload(WebhookPayload payload) {
         log.debug("webhook received streamId={} type={}", payload.streamId, payload.type);
         StreamEvent thin = new StreamEvent();
@@ -581,7 +575,6 @@ public class PortalClient {
     // Helpers
     // -------------------------------------------------------------------------
 
-    /** Convert a POJO to a flat {@code Map<String,Object>} via Gson round-trip. */
     @SuppressWarnings("unchecked")
     private Map<String, Object> toMap(Object obj) {
         JsonObject json = gson.toJsonTree(obj).getAsJsonObject();
@@ -589,8 +582,7 @@ public class PortalClient {
     }
 
     // -------------------------------------------------------------------------
-    // TypeAdapterFactory — populates the package-private `_raw` field on
-    // StreamEvent and WebhookPayload so the mapper can deserialize to T.
+    // TypeAdapterFactory — populates _raw on StreamEvent and WebhookPayload
     // -------------------------------------------------------------------------
 
     private static class RawJsonTypeAdapterFactory implements TypeAdapterFactory {

@@ -287,7 +287,7 @@ public class PortalClient implements AutoCloseable {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("main_key", mainKey);
         body.put("subkeys", subkeys);
-        body.putAll(toMap(content));
+        body.put("payment_request", gson.toJsonTree(content));
         JsonObject resp = post("/payments/single", body, JsonObject.class);
         String streamId = resp.get("stream_id").getAsString();
         return registerStream(streamId,
@@ -300,7 +300,7 @@ public class PortalClient implements AutoCloseable {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("main_key", mainKey);
         body.put("subkeys", subkeys);
-        body.putAll(toMap(content));
+        body.put("payment_request", gson.toJsonTree(content));
         JsonObject resp = post("/payments/raw", body, JsonObject.class);
         String streamId = resp.get("stream_id").getAsString();
         return registerStream(streamId,
@@ -313,7 +313,7 @@ public class PortalClient implements AutoCloseable {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("main_key", mainKey);
         body.put("subkeys", subkeys);
-        body.putAll(toMap(content));
+        body.put("payment_request", gson.toJsonTree(content));
         JsonObject resp = post("/payments/recurring", body, JsonObject.class);
         String streamId = resp.get("stream_id").getAsString();
         return registerStream(streamId,
@@ -352,7 +352,7 @@ public class PortalClient implements AutoCloseable {
         Map<String, Object> body = new java.util.HashMap<>();
         body.put("recipient_key", recipientKey);
         body.put("subkeys", subkeys);
-        body.putAll(toMap(params));
+        body.put("content", gson.toJsonTree(params));
         JsonObject resp = post("/invoices/request", body, JsonObject.class);
         String streamId = resp.get("stream_id").getAsString();
         return registerStream(streamId, json -> gson.fromJson(json, InvoicePaymentResponse.class));

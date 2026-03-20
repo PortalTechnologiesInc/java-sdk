@@ -249,6 +249,16 @@ public class PortalClient implements AutoCloseable {
         return get("/info", InfoResponse.class);
     }
 
+    /**
+     * Get the content for {@code /.well-known/nostr.json} (NIP-05 verification).
+     * Maps names to public keys and optionally to relay lists.
+     * No authentication required.
+     */
+    public Nip05WellKnownResponse wellKnownNostrJson()
+            throws IOException, InterruptedException, PortalSDKException {
+        return get("/well-known/nostr.json", Nip05WellKnownResponse.class);
+    }
+
     // -------------------------------------------------------------------------
     // Key Handshake
     // -------------------------------------------------------------------------

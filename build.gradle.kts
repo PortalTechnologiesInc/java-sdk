@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "cc.getportal"
-version = "0.3.0"
+version = "0.4.0"
 
 java {
     toolchain {
@@ -23,7 +23,7 @@ publishing {
 
             groupId = "cc.getportal"
             artifactId = "portal-java-sdk"
-            version = "0.3.0"
+            version = "0.4.0"
         }
     }
 }
@@ -39,9 +39,6 @@ dependencies {
     // SLF4J API and simple backend
     implementation("org.slf4j:slf4j-api:2.0.17")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
-
-    // WebSocket Client
-    implementation("org.java-websocket:Java-WebSocket:1.6.0")
 
     // Json serialization
     implementation("com.google.code.gson:gson:2.13.2")

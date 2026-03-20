@@ -1,144 +1,105 @@
-# Portal Java SDK - Documentation
+# Portal Java SDK
 
-## Introduction
-
-A Java client for the Portal WebSocket Server, providing Nostr-based authentication and Lightning Network payment processing capabilities.
-
----
+Java 17 SDK for the [Portal REST API](https://github.com/PortalTechnologiesInc/lib).
 
 ## Installation
 
-1. Add the Jitpack repository to your `build.gradle`:
-   ```groovy
-   repositories {
-       maven { url 'https://jitpack.io' }
-   }
-   ```
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories { maven { url = uri("https://jitpack.io") } }
+}
 
-   Or if you are using Maven, add the following to your `pom.xml`:
-    ```xml
-    <repository>
-        <id>jitpack.io</id>
-        <url>https://jitpack.io</url>
-    </repository>
-    ```
-
-2. Add the dependency to your `build.gradle`:
-   ```groovy
-   dependencies {
-      implementation 'com.github.PortalTechnologiesInc:java-sdk:0.3.0'
-   }
-   ```
-
-   Or if you are using Maven, add the following to your `pom.xml`:
-    ```xml
-    <dependency>
-        <groupId>com.github.PortalTechnologiesInc</groupId>
-        <artifactId>java-sdk</artifactId>
-        <version>0.3.0</version>
-    </dependency>
-    ```
-
-3. Once you're done, you may now proceed integrating the SDK into your project.
-
----
-
-## Versioning & Compatibility
-
-The Java SDK version is kept in sync with the [Portal SDK Daemon](https://hub.docker.com/r/getportal/sdk-daemon) (`getportal/sdk-daemon`).
-
-**Compatibility rule:** the `major.minor` version of the SDK must match the `major.minor` version of the SDK Daemon. The patch version (`x` in `0.3.x`) is independent and can differ — it only contains bug fixes.
-
-| SDK version | SDK Daemon version |
-|-------------|-------------------|
-| `0.3.x` | `0.3.x` |
-
-**Example:** SDK `0.3.0` works with `getportal/sdk-daemon:0.3.1`, but not with `getportal/sdk-daemon:0.4.0`.
-
-When upgrading to a new `major.minor`, update both the SDK dependency and the Docker image tag together.
-
-
----
-
-## Basic Usage
-
-### Initialization
-
-Create an instance of `PortalSDK` by passing the websocket endpoint of your portal server:
-
-```java
-var portalSDK = new PortalSDK(wsEndpoint);
+// build.gradle.kts
+dependencies {
+    implementation("com.github.PortalTechnologiesInc:java-sdk:0.4.0")
+}
 ```
 
-### Connecting to the server
+## Setup
 
-Establish the WebSocket connection, then authenticate with your token:
-
-```java
-portalSDK.connect();
-portalSDK.authenticate(authToken);
-```
-
-
-### Sending a command
-
-You can send a command to the server by calling the `sendCommand` method.
+Choose how you want to receive async results:
 
 ```java
-portalSDK.sendCommand(request, (response, err) -> {
-    if(err != null) {
-        logger.error("error sending command: {}", err);
-        return;
-    }
-    logger.info("command sent successfully: {}", response);
-});
+// Manual polling — you call pollUntilComplete() yourself, no background threads
+PortalClient client = new PortalClient(
+    PortalClientConfig.create("http://localhost:3000", "token")
+);
+
+// Auto-polling — background scheduler, just use done()
+PortalClient client = new PortalClient(
+    PortalClientConfig.create("http://localhost:3000", "token")
+        .autoPolling(500) // poll every 500ms
+);
+
+// Webhooks — portal-rest POSTs to your server, just use done()
+PortalClient client = new PortalClient(
+    PortalClientConfig.create("http://localhost:3000", "token")
+        .webhookSecret("my-secret")
+);
 ```
 
-### Basic example
+## Async operations
+
+All async methods return `AsyncOperation<T>` with `streamId` (available immediately)
+and `done` (`CompletableFuture<T>` that resolves when the operation completes).
+
+### Manual polling
 
 ```java
-portalSDK.sendCommand(new CalculateNextOccurrenceRequest("weekly", System.currentTimeMillis() / 1000), (res, err) -> {
-    if(err != null) {
-        logger.error("error calculating next occurrence: {}", err);
-        return;
-    }
-    logger.info("next occurrence: {}", res.next_occurrence());
-});
+AsyncOperation<InvoiceStatus> op = client.requestSinglePayment(
+    mainKey, List.of(),
+    new SinglePaymentRequestContent("Coffee", 1000, Currency.MILLISATS, null, null, null)
+);
+
+// blocks until paid/rejected/timeout
+InvoiceStatus result = client.pollUntilComplete(op, PollOptions.defaults().timeoutMs(60_000));
+System.out.println(result.status); // "paid", "timeout", "user_rejected", ...
 ```
----
 
-## Available Commands
+### Auto-polling
 
-Commands are implemented as specific request classes in [`src/main/java/cc/getportal/command/request/`](./src/main/java/cc/getportal/command/request/), and used via the `sendCommand()` method of the [`PortalSDK`](./src/main/java/cc/getportal/PortalSDK.java) class.
+```java
+// client configured with .autoPolling(500)
+AsyncOperation<InvoiceStatus> op = client.requestSinglePayment(...);
+op.done().thenAccept(result -> System.out.println(result.status));
+```
 
-Some key available commands include:
+### Webhooks
 
-- [`AuthRequest`](./src/main/java/cc/getportal/command/request/AuthRequest.java): Authenticate using a token.
-- [`KeyHandshakeUrlRequest`](./src/main/java/cc/getportal/command/request/KeyHandshakeUrlRequest.java): Get handshake URL for key and relays.
-- [`RequestSinglePaymentRequest`](./src/main/java/cc/getportal/command/request/RequestSinglePaymentRequest.java): Request a single payment.
-- [`MintCashuRequest`](./src/main/java/cc/getportal/command/request/MintCashuRequest.java): Mint Cashu tokens.
+```java
+// client configured with .webhookSecret("my-secret")
+AsyncOperation<InvoiceStatus> op = client.requestSinglePayment(...);
+op.done().thenAccept(result -> System.out.println(result.status));
 
-> See [`src/main/java/cc/getportal/command/request/`](./src/main/java/cc/getportal/command/request/) for all available commands and additional details.
+// in your HTTP server's POST /webhook handler:
+client.deliverWebhookPayload(rawBody, request.getHeader("X-Portal-Signature"));
+```
 
-To use a command, instantiate its request class and pass it to `PortalSDK.sendCommand(...)`. The full list of commands may evolve; check the request folder for the latest options.
+## Async methods
 
----
+| Method | Resolves to |
+|--------|-------------|
+| `requestSinglePayment(mainKey, subkeys, content)` | `AsyncOperation<InvoiceStatus>` |
+| `requestPaymentRaw(mainKey, subkeys, content)` | `AsyncOperation<InvoiceStatus>` |
+| `requestRecurringPayment(mainKey, subkeys, content)` | `AsyncOperation<RecurringPaymentResponseContent>` |
+| `requestInvoice(recipientKey, subkeys, params)` | `AsyncOperation<InvoicePaymentResponse>` |
+| `requestCashu(recipientKey, subkeys, mintUrl, unit, amount)` | `AsyncOperation<CashuResponseStatus>` |
+| `authenticateKey(mainKey, subkeys)` | `AsyncOperation<AuthResponseData>` |
+| `newKeyHandshakeUrl(staticToken, noRequest)` | `AsyncOperation<KeyHandshakeResult>` |
 
-## Example Integrations
+## Sync methods
 
-- See [portal-demo](https://github.com/PortalTechnologiesInc/portal-demo) for a Kotlin example.
+`health()`, `version()`, `info()`, `fetchProfile()`, `payInvoice()`,
+`closeRecurringPayment()`, `issueJwt()`, `verifyJwt()`, `addRelay()`, `removeRelay()`,
+`mintCashu()`, `burnCashu()`, `sendCashuDirect()`, `calculateNextOccurrence()`,
+`fetchNip05Profile()`, `getWalletInfo()`
 
----
+## Versioning
 
-## Main API
+Java SDK `major.minor` must match the portal-rest (sdk-daemon) version.
 
-- `PortalSDK` - Main client class
-- `PortalRequest` - Represents a request to the server
-- `PortalResponse` - Represents a response from the server
-- `PortalNotification` - Represents a notification from the server
-
----
-
-## Support
-
-For questions or issues, see the official documentation or open an issue on the project's GitHub repository.
+| Java SDK | sdk-daemon |
+|----------|------------|
+| 0.4.x    | 0.4.x      |
+| 0.3.x    | 0.3.x      |

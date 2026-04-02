@@ -492,15 +492,16 @@ public class PortalClient implements AutoCloseable {
 
     /**
      * Create an age verification session and automatically start listening for the
-     * verification token. Returns session info plus an {@link AsyncOperation} that
-     * resolves when the user completes verification.
+     * verification token. Returns a {@link VerificationSession} containing session
+     * info and an {@link AsyncOperation} that resolves when the user completes
+     * verification.
      *
-     * <p>Redirect the user to {@code response.session_url} in their browser.
-     * Poll or await {@code done()} for the {@link CashuResponseStatus} result.
+     * <p>Redirect the user to {@code session.session_url} in their browser.
+     * Poll or await {@code operation.done()} for the {@link CashuResponseStatus} result.
      *
      * @param relayUrls optional relay URLs; defaults to server's [nostr] config if null
      */
-    public AsyncOperation<CashuResponseStatus> createVerificationSession(
+    public VerificationSession createVerificationSession(
             @Nullable List<String> relayUrls
     ) throws IOException, InterruptedException, PortalSDKException {
         Map<String, Object> body = new java.util.HashMap<>();
@@ -508,15 +509,11 @@ public class PortalClient implements AutoCloseable {
         VerificationSessionResponse resp = post("/verification/sessions", body, VerificationSessionResponse.class);
         AsyncOperation<CashuResponseStatus> op = registerStream(resp.stream_id,
                 json -> gson.fromJson(json.getAsJsonObject("status"), CashuResponseStatus.class));
-        op.setMetadata("session_id", resp.session_id);
-        op.setMetadata("session_url", resp.session_url);
-        op.setMetadata("ephemeral_npub", resp.ephemeral_npub);
-        op.setMetadata("expires_at", String.valueOf(resp.expires_at));
-        return op;
+        return new VerificationSession(resp, op);
     }
 
     /** Convenience overload with default relays. */
-    public AsyncOperation<CashuResponseStatus> createVerificationSession()
+    public VerificationSession createVerificationSession()
             throws IOException, InterruptedException, PortalSDKException {
         return createVerificationSession(null);
     }

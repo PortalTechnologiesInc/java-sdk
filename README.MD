@@ -12,7 +12,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.PortalTechnologiesInc:java-sdk:0.4.0")
+    implementation("com.github.PortalTechnologiesInc:java-sdk:0.4.1")
 }
 ```
 
@@ -87,6 +87,22 @@ client.deliverWebhookPayload(rawBody, request.getHeader("X-Portal-Signature"));
 | `requestCashu(recipientKey, subkeys, mintUrl, unit, amount)` | `AsyncOperation<CashuResponseStatus>` |
 | `authenticateKey(mainKey, subkeys)` | `AsyncOperation<AuthResponseData>` |
 | `newKeyHandshakeUrl(staticToken, noRequest)` | `AsyncOperation<KeyHandshakeResult>` |
+| `createVerificationSession(relayUrls)` | `AsyncOperation<CashuResponseStatus>` |
+| `requestVerificationToken(recipientKey, subkeys)` | `AsyncOperation<CashuResponseStatus>` |
+
+### Age Verification
+
+```java
+// Create verification session — single call handles everything
+AsyncOperation<CashuResponseStatus> op = client.createVerificationSession();
+System.out.println("Redirect user to: " + op.sessionUrl());
+
+// Wait for the user to complete verification in their browser
+CashuResponseStatus result = client.pollUntilComplete(op, new PollOptions(1000, 300_000));
+if (result.status.equals("success")) {
+    System.out.println("Verified! Token: " + result.token);
+}
+```
 
 ## Sync methods
 

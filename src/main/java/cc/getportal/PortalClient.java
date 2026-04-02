@@ -487,6 +487,58 @@ public class PortalClient implements AutoCloseable {
     }
 
     // -------------------------------------------------------------------------
+    // Verification
+    // -------------------------------------------------------------------------
+
+    /**
+     * Create an age verification session and automatically start listening for the
+     * verification token. Returns session info plus an {@link AsyncOperation} that
+     * resolves when the user completes verification.
+     *
+     * <p>Redirect the user to {@code response.session_url} in their browser.
+     * Poll or await {@code done()} for the {@link CashuResponseStatus} result.
+     *
+     * @param relayUrls optional relay URLs; defaults to server's [nostr] config if null
+     */
+    public AsyncOperation<CashuResponseStatus> createVerificationSession(
+            @Nullable List<String> relayUrls
+    ) throws IOException, InterruptedException, PortalSDKException {
+        Map<String, Object> body = new java.util.HashMap<>();
+        if (relayUrls != null) body.put("relays", relayUrls);
+        VerificationSessionResponse resp = post("/verification/sessions", body, VerificationSessionResponse.class);
+        AsyncOperation<CashuResponseStatus> op = registerStream(resp.stream_id,
+                json -> gson.fromJson(json.getAsJsonObject("status"), CashuResponseStatus.class));
+        op.setMetadata("session_id", resp.session_id);
+        op.setMetadata("session_url", resp.session_url);
+        op.setMetadata("ephemeral_npub", resp.ephemeral_npub);
+        op.setMetadata("expires_at", String.valueOf(resp.expires_at));
+        return op;
+    }
+
+    /** Convenience overload with default relays. */
+    public AsyncOperation<CashuResponseStatus> createVerificationSession()
+            throws IOException, InterruptedException, PortalSDKException {
+        return createVerificationSession(null);
+    }
+
+    /**
+     * Request a verification token from a user who already holds one
+     * (e.g. verified through the mobile app).
+     *
+     * @param recipientKey hex-encoded public key of the token holder
+     * @param subkeys      optional subkeys
+     */
+    public AsyncOperation<CashuResponseStatus> requestVerificationToken(
+            String recipientKey, List<String> subkeys
+    ) throws IOException, InterruptedException, PortalSDKException {
+        Map<String, Object> body = Map.of("recipient_key", recipientKey, "subkeys", subkeys);
+        JsonObject resp = post("/verification/token", body, JsonObject.class);
+        String streamId = resp.get("stream_id").getAsString();
+        return registerStream(streamId,
+                json -> gson.fromJson(json.getAsJsonObject("status"), CashuResponseStatus.class));
+    }
+
+    // -------------------------------------------------------------------------
     // Events (low-level)
     // -------------------------------------------------------------------------
 

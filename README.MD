@@ -87,21 +87,6 @@ client.deliverWebhookPayload(rawBody, request.getHeader("X-Portal-Signature"));
 | `requestCashu(recipientKey, subkeys, mintUrl, unit, amount)` | `AsyncOperation<CashuResponseStatus>` |
 | `authenticateKey(mainKey, subkeys)` | `AsyncOperation<AuthResponseData>` |
 | `newKeyHandshakeUrl(staticToken, noRequest)` | `AsyncOperation<KeyHandshakeResult>` |
-| `createVerificationSession(relayUrls)` | `VerificationSession` |
-| `requestVerificationToken(recipientKey, subkeys)` | `AsyncOperation<CashuResponseStatus>` |
-
-### Age Verification
-
-```java
-VerificationSession session = client.createVerificationSession();
-System.out.println("Redirect user to: " + session.session.session_url);
-
-CashuResponseStatus result = client.pollUntilComplete(session.operation, new PollOptions(1000, 300_000));
-if (result.status.equals("success")) {
-    System.out.println("Verified! Token: " + result.token);
-}
-```
-
 ## Sync methods
 
 `health()`, `version()`, `info()`, `fetchProfile()`, `payInvoice()`,

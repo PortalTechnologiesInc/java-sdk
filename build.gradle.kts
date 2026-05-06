@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "cc.getportal"
-version = "0.4.1"
+version = "0.4.2"
 
 java {
     toolchain {
@@ -23,7 +23,7 @@ publishing {
 
             groupId = "cc.getportal"
             artifactId = "portal-java-sdk"
-            version = "0.4.1"
+            version = "0.4.2"
         }
     }
 }

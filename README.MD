@@ -12,7 +12,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.PortalTechnologiesInc:java-sdk:0.4.1")
+    implementation("com.github.PortalTechnologiesInc:java-sdk:0.4.2")
 }
 ```
 
